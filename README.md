@@ -10,25 +10,27 @@ our own FPV work and shared freely.
 
 | Tool | Platform | What it does |
 |---|---|---|
-| **[HDZero Converter](HDZeroConverter/)** | macOS 13+ | Native SwiftUI app (bundled ffmpeg) that fixes HDZero recordings so Apple decoders play them correctly — converts full-range `yuvj420p` H.264 → limited-range BT.709 and re-wraps for broad compatibility (QuickTime/iPhone stop showing black / washed-out). Fully portable, no Homebrew needed on the target Mac. |
+| **[HDZero Converter](HDZeroConverter/)** | macOS 13+ | Native SwiftUI app (bundled ffmpeg) that fixes HDZero recordings so Apple decoders play them correctly — converts full-range `yuvj420p` H.264 → limited-range BT.709 and re-wraps for broad compatibility (QuickTime/iPhone stop showing black / washed-out). |
+| **[HDZero Programmer](HDZeroProgrammer/)** | macOS 13+ | Native SwiftUI flasher for HDZero gear — VTX (bundled `flashrom` via CH341A, or native CH341 SPI), ELRS radio (esptool), Event VRX/goggles, and live monitor. One UI, the right flasher per device. |
 
+Both apps are fully portable (their helper tools are embedded — no Homebrew needed on the target Mac).
 More tools will land here over time.
 
-## HDZero Converter — download
+## Download
 
-Grab the signed + notarized `.dmg` from the [**Releases**](../../releases) page, drag the app to
-`/Applications`, and double-click. No Terminal/`xattr` workaround needed (Apple-notarized).
-
-To build it yourself, see [`HDZeroConverter/README.md`](HDZeroConverter/README.md).
+Grab the signed + notarized `.dmg` for either app from the [**Releases**](../../releases) page, drag
+the app to `/Applications`, and double-click. No Terminal/`xattr` workaround needed (Apple-notarized).
+To build yourself, see each tool's own README.
 
 ## Releasing (maintainers)
 
 Releases are built, **signed (Developer ID), notarized, and published** entirely by GitHub Actions
-([`.github/workflows/release-converter.yml`](.github/workflows/release-converter.yml)) on a macOS
-runner. Push a tag and the workflow attaches the notarized `.dmg` to a GitHub Release:
+([`.github/workflows/release.yml`](.github/workflows/release.yml)) on a macOS runner. Push a tag and
+the workflow attaches the notarized `.dmg` to a GitHub Release — the tag prefix selects the tool:
 
 ```bash
-git tag converter-v1.4 && git push origin converter-v1.4
+git tag converter-v1.4  && git push origin converter-v1.4    # → HDZero Converter
+git tag programmer-v1.1 && git push origin programmer-v1.1    # → HDZero Programmer
 ```
 
 (Or run the workflow manually via **Actions → Build & Release → Run workflow** — that builds + signs +

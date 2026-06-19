@@ -1,18 +1,25 @@
-name: Build & Release — HDZero Converter
+name: Build & Release — HDZero tools
 
-# Push a tag like `converter-v1.4` to build, sign, notarize, and publish a GitHub Release with the
-# .dmg. `workflow_dispatch` builds the same pipeline but uploads the .dmg as a run artifact only
-# (no release) — handy for testing the signing chain without cutting a release.
+# Push a tag to build, sign, notarize, and publish a GitHub Release with the .dmg:
+#   converter-v1.4   → HDZeroConverter
+#   programmer-v1.1  → HDZeroProgrammer
+# `workflow_dispatch` runs the same pipeline but uploads the .dmg as a run artifact only (no release) —
+# handy for testing the signing chain without cutting a release.
 on:
   push:
     tags:
       - 'converter-v*'
+      - 'programmer-v*'
   workflow_dispatch:
     inputs:
-      version:
-        description: 'Version string for the build (e.g. 1.4)'
+      tool:
+        description: 'Which tool to build'
+        type: choice
+        options: [converter, programmer]
         required: true
-        default: '1.4'
+      version:
+        description: 'Version string (e.g. 1.4)'
+        required: true
 
 permissions:
   contents: write          # needed to create the GitHub Release
@@ -20,25 +27,34 @@ permissions:
 jobs:
   build:
     runs-on: macos-14
-    defaults:
-      run:
-        working-directory: HDZeroConverter
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install build tools (ffmpeg + dylibbundler)
-        run: brew install ffmpeg dylibbundler
-
-      - name: Derive version
-        id: ver
+      - name: Resolve tool + version
+        id: meta
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TOOL="${{ github.event.inputs.tool }}"
             V="${{ github.event.inputs.version }}"
           else
-            V="${GITHUB_REF_NAME#converter-v}"      # converter-v1.4 -> 1.4
+            case "$GITHUB_REF_NAME" in
+              converter-v*)  TOOL="converter" ;;
+              programmer-v*) TOOL="programmer" ;;
+              *) echo "::error::Unrecognized tag $GITHUB_REF_NAME"; exit 1 ;;
+            esac
+            V="${GITHUB_REF_NAME#*-v}"           # converter-v1.4 -> 1.4
           fi
-          echo "version=$V" >> "$GITHUB_OUTPUT"
-          echo "Version: $V"
+          case "$TOOL" in
+            converter)  DIR="HDZeroConverter";  APP="HDZero Converter";  BREW="ffmpeg dylibbundler" ;;
+            programmer) DIR="HDZeroProgrammer"; APP="HDZero Programmer"; BREW="flashrom dylibbundler" ;;
+          esac
+          {
+            echo "tool=$TOOL"; echo "dir=$DIR"; echo "app=$APP"; echo "brew=$BREW"; echo "version=$V"
+          } >> "$GITHUB_OUTPUT"
+          echo "→ $TOOL ($DIR) v$V"
+
+      - name: Install build tools
+        run: brew install ${{ steps.meta.outputs.brew }}
 
       - name: Import Developer ID signing certificate
         env:
@@ -55,10 +71,8 @@ jobs:
             -A -t cert -f pkcs12 -k "$KEYCHAIN"
           security set-key-partition-list -S apple-tool:,apple:,codesign: \
             -s -k "$KCPASS" "$KEYCHAIN" >/dev/null
-          # Put our keychain first in the search list so `security find-identity` finds the cert.
           security list-keychain -d user -s "$KEYCHAIN" login.keychain-db
           rm -f "$RUNNER_TEMP/cert.p12"
-          echo "Imported identities:"
           security find-identity -v -p codesigning | grep "Developer ID Application" || true
 
       - name: Write App Store Connect API key (for notarization)
@@ -67,17 +81,18 @@ jobs:
         run: echo "$ASC_KEY_BASE64" | base64 --decode > "$RUNNER_TEMP/ascauthkey.p8"
 
       - name: Build · sign · notarize · package
+        working-directory: ${{ steps.meta.outputs.dir }}
         env:
-          VERSION: ${{ steps.ver.outputs.version }}
+          VERSION: ${{ steps.meta.outputs.version }}
           NOTARY_KEY: ${{ runner.temp }}/ascauthkey.p8
           NOTARY_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           NOTARY_ISSUER: ${{ secrets.ASC_ISSUER_ID }}
         run: |
           chmod +x build_app.sh
           ./build_app.sh
-          # Stable artifact name (no spaces) for upload.
-          DMG="HDZero Converter ${VERSION}.dmg"
-          cp "$DMG" "$RUNNER_TEMP/HDZero-Converter-${VERSION}.dmg"
+          SAFE="${{ steps.meta.outputs.app }}"; SAFE="${SAFE// /-}"   # "HDZero Programmer" -> HDZero-Programmer
+          cp "${{ steps.meta.outputs.app }} ${VERSION}.dmg" "$RUNNER_TEMP/${SAFE}-${VERSION}.dmg"
+          echo "asset=$RUNNER_TEMP/${SAFE}-${VERSION}.dmg" >> "$GITHUB_ENV"
 
       - name: Clean up secrets
         if: always()
@@ -87,23 +102,19 @@ jobs:
         if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
         with:
-          name: HDZero-Converter-${{ steps.ver.outputs.version }}
-          path: ${{ runner.temp }}/HDZero-Converter-${{ steps.ver.outputs.version }}.dmg
+          name: ${{ steps.meta.outputs.tool }}-${{ steps.meta.outputs.version }}
+          path: ${{ env.asset }}
 
       - name: Publish GitHub Release (tag pushes)
         if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.ver.outputs.version }}
+          APP: ${{ steps.meta.outputs.app }}
+          VERSION: ${{ steps.meta.outputs.version }}
         run: |
-          ASSET="$RUNNER_TEMP/HDZero-Converter-${VERSION}.dmg"
-          NOTES="Native macOS app to fix HDZero/FPV goggle recordings (full-range yuvj420p → limited-range BT.709, re-wrapped for broad playback). Apple-signed + notarized — drag to Applications and double-click, no Terminal workaround.
-
-          **Install:** download the \`.dmg\`, drag **HDZero Converter** to Applications, launch.
-          **Requires:** macOS 13 (Ventura) or newer. Fully portable (ffmpeg bundled — no Homebrew needed)."
+          NOTES="$APP $VERSION — Apple-signed + notarized macOS app. Download the .dmg, drag the app to Applications, double-click. Requires macOS 13+. No Terminal/xattr workaround needed."
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" "$ASSET" --clobber
+            gh release upload "$GITHUB_REF_NAME" "$asset" --clobber
           else
-            gh release create "$GITHUB_REF_NAME" "$ASSET" \
-              --title "HDZero Converter ${VERSION}" --notes "$NOTES"
+            gh release create "$GITHUB_REF_NAME" "$asset" --title "$APP $VERSION" --notes "$NOTES"
           fi
