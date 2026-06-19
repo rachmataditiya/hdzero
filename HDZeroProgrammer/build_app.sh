@@ -7,7 +7,7 @@ cd "$(dirname "$0")"
 
 APP_NAME="HDZero Programmer"
 BUNDLE_ID="co.arkana.hdzeroprogrammer"
-VERSION="${VERSION:-1.1}"
+VERSION="${VERSION:-1.2}"
 
 # ---- Signing / notarization configuration ----------------------------------
 # Two "Developer ID Application" certs share the same name in this keychain, so
@@ -67,6 +67,23 @@ for f in "$FR_DIR/flashrom" "$FR_DIR"/libs/*.dylib; do
     done
 done
 
+# ---- Embed esptool (the Radio ELRS path shells out to it, like the official
+#      HDZero tool) — a self-contained PyInstaller binary, cached between builds.
+ESPTOOL_VER="${ESPTOOL_VER:-5.3.0}"
+ESP_DIR="$APP_DIR/Contents/Resources/esptool"
+ESP_CACHE="$HOME/.cache/hdzero-build/esptool-$ESPTOOL_VER"
+mkdir -p "$ESP_DIR" "$ESP_CACHE"
+if [ ! -f "$ESP_CACHE/esptool" ]; then
+    echo "▶︎ Downloading esptool $ESPTOOL_VER (arm64)…"
+    curl -fsSL "https://github.com/espressif/esptool/releases/download/v${ESPTOOL_VER}/esptool-v${ESPTOOL_VER}-macos-arm64.tar.gz" \
+        -o "$ESP_CACHE/esptool.tar.gz"
+    tar -xzf "$ESP_CACHE/esptool.tar.gz" -C "$ESP_CACHE"
+    cp "$ESP_CACHE/esptool-macos-arm64/esptool" "$ESP_CACHE/esptool"
+fi
+echo "▶︎ Embedding esptool from cache"
+cp "$ESP_CACHE/esptool" "$ESP_DIR/esptool"
+chmod +x "$ESP_DIR/esptool"
+
 # ---- Info.plist ------------------------------------------------------------
 cat > "$APP_DIR/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -101,6 +118,11 @@ find "$FR_DIR/libs" -name "*.dylib" -print0 | while IFS= read -r -d '' lib; do
     codesign "${SIGN_FLAGS[@]}" "$lib"
 done
 codesign "${SIGN_FLAGS[@]}" --entitlements "$ENTITLEMENTS" "$FR_DIR/flashrom"
+# Re-sign the bundled esptool with our Developer ID + hardened runtime. It MUST get
+# `disable-library-validation` (in $ENTITLEMENTS): esptool is a PyInstaller onefile
+# that extracts Espressif's Python.framework (a DIFFERENT Team ID) at runtime and
+# dlopens it — without this entitlement the team-ID mismatch makes it fail to launch.
+codesign "${SIGN_FLAGS[@]}" --entitlements "$ENTITLEMENTS" "$ESP_DIR/esptool"
 codesign "${SIGN_FLAGS[@]}" --entitlements "$ENTITLEMENTS" "$APP_DIR/Contents/MacOS/HDZeroProgrammer"
 codesign "${SIGN_FLAGS[@]}" --entitlements "$ENTITLEMENTS" "$APP_DIR"
 
@@ -113,6 +135,13 @@ if "$FR_DIR/flashrom" --version >/dev/null 2>&1; then
     echo "✓ Embedded flashrom works ($LIBS bundled libraries)"
 else
     echo "✗ Embedded flashrom failed to run — check dylibbundler output"
+fi
+
+echo "▶︎ Verifying embedded esptool runs…"
+if "$ESP_DIR/esptool" version >/dev/null 2>&1; then
+    echo "✓ Embedded esptool works"
+else
+    echo "✗ Embedded esptool failed to run (re-sign may have broken it)"
 fi
 
 if [ "$DO_NOTARIZE" != "1" ]; then

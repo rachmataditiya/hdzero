@@ -113,14 +113,19 @@ struct OnlineLocalPicker: View {
                 }
             } else {
                 Field(label: "Version") {
-                    Picker("", selection: $c.selectedVersion) {
+                    // Set the source directly from the picker's binding so it can't
+                    // get out of sync with the selection (an .onChange here didn't
+                    // always fire → button stayed disabled with a version chosen).
+                    Picker("", selection: Binding(
+                        get: { c.selectedVersion },
+                        set: { c.selectedVersion = $0; updateSource() }
+                    )) {
                         Text("Select version…").tag(String?.none)
                         ForEach(app.catalog.versions(for: c.kind), id: \.version) { va in
                             Text(va.version).tag(String?.some(va.version))
                         }
                     }
                     .labelsHidden()
-                    .onChange(of: c.selectedVersion) { _ in updateSource() }
                 }
                 if app.catalog.state == .loading {
                     HStack(spacing: 6) {

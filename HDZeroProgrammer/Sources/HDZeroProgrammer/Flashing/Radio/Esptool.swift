@@ -53,24 +53,61 @@ final class Esptool {
         _ = port.drain(timeout: 0.2)
     }
 
-    // MARK: Sync
+    // MARK: Sync / connect
 
-    func sync() throws {
+    /// One burst of SYNC attempts. Returns true on the first valid response.
+    /// The ESP ROM auto-bauds off the 0x55 run, so this works at the open baud
+    /// (we open at 115200 — the rate esptool's ROM connection uses).
+    @discardableResult
+    func trySync(attempts: Int = 5) -> Bool {
         var syncData: [UInt8] = [0x07, 0x07, 0x12, 0x20]
         syncData.append(contentsOf: [UInt8](repeating: 0x55, count: 32))
-        for attempt in 0..<7 {
-            do {
-                _ = try command(SYNC, data: syncData, timeout: 0.5)
-                // ROM emits several responses; drain extras.
-                _ = port.drain(timeout: 0.1)
-                log("ESP sync ok (attempt \(attempt + 1))\n")
-                return
-            } catch { Thread.sleep(forTimeInterval: 0.1) }
+        for _ in 0..<attempts {
+            if (try? command(SYNC, data: syncData, timeout: 0.2)) != nil {
+                _ = port.drain(timeout: 0.1)   // ROM emits several responses; drain extras
+                return true
+            }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        return false
+    }
+
+    func sync() throws { if !trySync(attempts: 7) { throw EspError.syncFailed } }
+
+    /// Get the ESP into the ROM bootloader and synced. Mirrors esptool's default
+    /// classic auto-reset (DTR→IO0, RTS→EN), then falls back to (a) syncing as-is
+    /// in case the MCU already staged the bootloader, and (b) sweeping the four
+    /// DTR/RTS static states for bridges wired/inverted differently than a CH340
+    /// (this radio's bridge enumerates as GenesysLogic, not CH340).
+    func connect() throws {
+        enterBootloader()
+        if trySync() { log("ESP synced (classic reset)\n"); return }
+        if trySync() { log("ESP synced (already in bootloader)\n"); return }
+        for (d, r) in [(false, false), (true, false), (false, true), (true, true)] {
+            port.setDTR(d); port.setRTS(r)
+            Thread.sleep(forTimeInterval: 0.1)
+            _ = port.drain(timeout: 0.1)
+            if trySync() { log("ESP synced (DTR=\(d) RTS=\(r))\n"); return }
         }
         throw EspError.syncFailed
     }
 
     // MARK: Flash a single image at an offset
+
+    /// ESP32 ROM-loader erase-size workaround (esptool `ESP32ROM.get_erase_size`).
+    /// Passing the raw size to the ESP32 ROM FLASH_BEGIN makes it hang on a bad
+    /// erase (→ no response); this computes the value the ROM expects.
+    private func eraseSize(offset: Int, size: Int) -> UInt32 {
+        let sectorsPerBlock = 16, sectorSize = 4096
+        let numSectors = (size + sectorSize - 1) / sectorSize
+        let startSector = offset / sectorSize
+        var headSectors = sectorsPerBlock - (startSector % sectorsPerBlock)
+        if numSectors < headSectors { headSectors = numSectors }
+        if numSectors < 2 * headSectors {
+            return UInt32((numSectors + 1) / 2 * sectorSize)
+        }
+        return UInt32((numSectors - headSectors) * sectorSize)
+    }
 
     func flashImage(_ data: [UInt8], at offset: Int, onProgress: (Double) -> Void) throws {
         let blockSize = 0x400      // 1 KiB ROM-loader block (conservative)
@@ -78,11 +115,11 @@ final class Esptool {
 
         // FLASH_BEGIN: eraseSize, numBlocks, blockSize, offset
         var begin: [UInt8] = []
-        begin.append(le32(UInt32(data.count)))
+        begin.append(le32(eraseSize(offset: offset, size: data.count)))
         begin.append(le32(UInt32(numBlocks)))
         begin.append(le32(UInt32(blockSize)))
         begin.append(le32(UInt32(offset)))
-        _ = try command(FLASH_BEGIN, data: begin, timeout: 10.0)
+        _ = try command(FLASH_BEGIN, data: begin, timeout: 30.0)
 
         for seq in 0..<numBlocks {
             let start = seq * blockSize
@@ -146,16 +183,27 @@ final class Esptool {
         packet.append(contentsOf: data)
         try port.write(slipEncode(packet))
 
-        // Read one SLIP frame as the response.
-        let frame = try readFrame(timeout: timeout)
-        guard frame.count >= 8, frame[0] == 0x01, frame[1] == cmd else {
-            throw EspError.badResponse
+        // Read SLIP frames until we get the response that echoes THIS command.
+        // The ROM emits several SYNC replies; without skipping them, the next
+        // command reads a stale `01 08` frame and we'd flag it as unexpected.
+        let deadline = Date().addingTimeInterval(timeout)
+        var seen: [[UInt8]] = []
+        while Date() < deadline {
+            guard let frame = try? readFrame(timeout: max(0.05, deadline.timeIntervalSinceNow)) else { continue }
+            if !frame.isEmpty { seen.append(frame) }
+            guard frame.count >= 8, frame[0] == 0x01 else { continue }
+            if frame[1] != cmd { continue }       // stale reply for a different command
+            // ROM response payload = `size` bytes after the 8-byte header; its last
+            // 2 bytes are the status (status, error) — status != 0 means failure.
+            let size = Int(frame[2]) | Int(frame[3]) << 8
+            if size >= 2, 8 + size <= frame.count, frame[8 + size - 2] != 0 {
+                throw EspError.commandFailed(cmd)
+            }
+            return frame
         }
-        // Status bytes are the last 2 (ROM) — non-zero failure byte → error.
-        if frame.count >= 10, frame[frame.count - 4] != 0 {
-            throw EspError.commandFailed(cmd)
-        }
-        return frame
+        let dump = seen.map { $0.map { String(format: "%02x", $0) }.joined() }.joined(separator: " | ")
+        log("DEBUG cmd 0x\(String(cmd, radix: 16)) no matching reply; frames seen: [\(dump.isEmpty ? "none" : dump)]\n")
+        throw EspError.badResponse
     }
 
     private func readFrame(timeout: TimeInterval) throws -> [UInt8] {

@@ -66,17 +66,22 @@ struct VTXView: View {
     private var onlinePicker: some View {
         VStack(alignment: .leading, spacing: 10) {
             Field(label: "Target") {
-                Picker("", selection: $c.vtxTarget) {
+                Picker("", selection: Binding(
+                    get: { c.vtxTarget },
+                    set: { c.vtxTarget = $0; c.selectedVersion = nil; updateSource() }
+                )) {
                     Text("Select target…").tag(String?.none)
                     ForEach(app.catalog.vtxTargets) { t in
                         Text(t.displayName).tag(String?.some(t.name))
                     }
                 }
                 .labelsHidden()
-                .onChange(of: c.vtxTarget) { _ in c.selectedVersion = nil; updateSource() }
             }
             Field(label: "Version") {
-                Picker("", selection: $c.selectedVersion) {
+                Picker("", selection: Binding(
+                    get: { c.selectedVersion },
+                    set: { c.selectedVersion = $0; updateSource() }
+                )) {
                     Text("Select version…").tag(String?.none)
                     ForEach(versionsForSelectedTarget, id: \.self) { v in
                         Text(v).tag(String?.some(v))
@@ -84,7 +89,6 @@ struct VTXView: View {
                 }
                 .labelsHidden()
                 .disabled(c.vtxTarget == nil)
-                .onChange(of: c.selectedVersion) { _ in updateSource() }
             }
             if app.catalog.state == .loading {
                 HStack(spacing: 6) {

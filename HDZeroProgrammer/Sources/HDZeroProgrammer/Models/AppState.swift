@@ -23,6 +23,10 @@ final class AppState: ObservableObject {
     /// inside the .app; fall back to a Homebrew install for `swift run` dev.
     let flashromPath: String = AppState.detectFlashrom()
 
+    /// Path to the real `esptool` used by the Radio ELRS path (matches the official
+    /// HDZero tool, which shells out to esptool for its robust stub-loader flashing).
+    let esptoolPath: String = AppState.detectEsptool()
+
     /// True if any device is mid-operation — used to lock tab switching.
     var anyBusy: Bool {
         allControllers.contains { $0.phase.isBusy }
@@ -59,6 +63,18 @@ final class AppState: ObservableObject {
             if FileManager.default.isExecutableFile(atPath: p) { return p }
         }
         return "/opt/homebrew/sbin/flashrom"
+    }
+
+    static func detectEsptool() -> String {
+        if let res = Bundle.main.resourcePath {
+            let bundled = res + "/esptool/esptool"
+            if FileManager.default.isExecutableFile(atPath: bundled) { return bundled }
+        }
+        for p in ["/opt/homebrew/bin/esptool", "/opt/homebrew/bin/esptool.py",
+                  "/usr/local/bin/esptool", "/usr/local/bin/esptool.py"] {
+            if FileManager.default.isExecutableFile(atPath: p) { return p }
+        }
+        return "esptool"
     }
 }
 
