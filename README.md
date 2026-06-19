@@ -21,6 +21,38 @@ Grab the signed + notarized `.dmg` from the [**Releases**](../../releases) page,
 
 To build it yourself, see [`HDZeroConverter/README.md`](HDZeroConverter/README.md).
 
+## Releasing (maintainers)
+
+Releases are built, **signed (Developer ID), notarized, and published** entirely by GitHub Actions
+([`.github/workflows/release-converter.yml`](.github/workflows/release-converter.yml)) on a macOS
+runner. Push a tag and the workflow attaches the notarized `.dmg` to a GitHub Release:
+
+```bash
+git tag converter-v1.4 && git push origin converter-v1.4
+```
+
+(Or run the workflow manually via **Actions → Build & Release → Run workflow** — that builds + signs +
+notarizes and uploads the `.dmg` as a run artifact, without cutting a release. Good for testing.)
+
+### One-time secrets
+
+The notarization secrets (App Store Connect API key) are already set. The **Developer ID signing
+certificate** must be added once (it needs your Keychain password, so it isn't scriptable from CI):
+
+1. **Keychain Access** → *My Certificates* → right-click **“Developer ID Application: ARKANA SOLUSI
+   DIGITAL, PT”** → **Export…** → save as `cert.p12`, set an export password.
+2. Upload it as two repo secrets:
+   ```bash
+   base64 -i cert.p12 | gh secret set DEVELOPER_ID_P12_BASE64 --repo rachmataditiya/hdzero
+   gh secret set DEVELOPER_ID_P12_PASSWORD --repo rachmataditiya/hdzero   # paste the export password
+   rm cert.p12
+   ```
+
+| Secret | Set by | Purpose |
+|---|---|---|
+| `ASC_API_KEY_BASE64`, `ASC_KEY_ID`, `ASC_ISSUER_ID` | ✅ already set | App Store Connect API key → `notarytool` |
+| `DEVELOPER_ID_P12_BASE64`, `DEVELOPER_ID_P12_PASSWORD` | **you, once (above)** | Developer ID cert → `codesign` |
+
 ## License
 
 [MIT](LICENSE) © Arkana Solusi Digital, PT.

@@ -7,7 +7,7 @@ cd "$(dirname "$0")"
 
 APP_NAME="HDZero Converter"
 BUNDLE_ID="co.arkana.hdzeroconverter"
-VERSION="1.3"
+VERSION="${VERSION:-1.3}"
 
 # ---- Signing / notarization configuration ----------------------------------
 # Override via env if needed, e.g. SIGN_IDENTITY="<SHA-1>" NOTARY_PROFILE="..." ./build_app.sh
@@ -20,6 +20,15 @@ if [ -z "${SIGN_IDENTITY:-}" ]; then
 fi
 NOTARY_PROFILE="${NOTARY_PROFILE:-ArkanaNotary}"
 ENTITLEMENTS="HDZeroConverter.entitlements"
+
+# Notarization auth. CI (GitHub Actions) passes the App Store Connect API key directly
+# (NOTARY_KEY=<.p8 path> + NOTARY_KEY_ID + NOTARY_ISSUER); locally we fall back to the stored
+# keychain profile created once via `xcrun notarytool store-credentials "ArkanaNotary"`.
+if [ -n "${NOTARY_KEY:-}" ]; then
+    NOTARY_ARGS=(--key "$NOTARY_KEY" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER")
+else
+    NOTARY_ARGS=(--keychain-profile "$NOTARY_PROFILE")
+fi
 
 SRC_FFMPEG="$(command -v ffmpeg)"
 SRC_FFPROBE="$(command -v ffprobe)"
@@ -117,19 +126,16 @@ fi
 # ---- Notarize the .app, then staple the ticket into the bundle -------------
 # We notarize a zip of the .app and staple the ticket directly into the bundle,
 # so the installed app passes Gatekeeper even offline.
-echo "▶︎ Submitting to Apple notary service (profile: $NOTARY_PROFILE)…"
+echo "▶︎ Submitting to Apple notary service…"
 NOTARY_ZIP="$(mktemp -d)/HDZeroConverter.zip"
 ditto -c -k --keepParent "$APP_DIR" "$NOTARY_ZIP"
 
-if xcrun notarytool submit "$NOTARY_ZIP" \
-       --keychain-profile "$NOTARY_PROFILE" --wait; then
+if xcrun notarytool submit "$NOTARY_ZIP" "${NOTARY_ARGS[@]}" --wait; then
     echo "▶︎ Stapling ticket…"
     xcrun stapler staple "$APP_DIR"
     xcrun stapler validate "$APP_DIR" && echo "✓ Notarized + stapled"
 else
-    echo "✗ Notarization failed. Inspect with:"
-    echo "    xcrun notarytool history --keychain-profile $NOTARY_PROFILE"
-    echo "    xcrun notarytool log <submission-id> --keychain-profile $NOTARY_PROFILE"
+    echo "✗ Notarization failed. Inspect with: xcrun notarytool history ${NOTARY_ARGS[*]}"
     exit 1
 fi
 rm -f "$NOTARY_ZIP"
@@ -179,8 +185,8 @@ codesign --force --timestamp -s "$SIGN_IDENTITY" "$DMG_NAME" 2>/dev/null || true
 # Notarize + staple the .dmg itself as well. The .app inside is already notarized, but a freshly
 # DOWNLOADED dmg gets a com.apple.quarantine xattr — on modern macOS a signed-but-not-notarized dmg
 # is "rejected: Unnotarized Developer ID" when opened. Notarizing the container fixes that.
-echo "▶︎ Notarizing the .dmg (profile: $NOTARY_PROFILE)…"
-if xcrun notarytool submit "$DMG_NAME" --keychain-profile "$NOTARY_PROFILE" --wait; then
+echo "▶︎ Notarizing the .dmg…"
+if xcrun notarytool submit "$DMG_NAME" "${NOTARY_ARGS[@]}" --wait; then
     xcrun stapler staple "$DMG_NAME" && echo "✓ DMG notarized + stapled"
 else
     echo "✗ DMG notarization failed (the app inside is still notarized; only the container isn't)"
