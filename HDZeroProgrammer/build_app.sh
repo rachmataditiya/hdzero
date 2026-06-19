@@ -7,7 +7,7 @@ cd "$(dirname "$0")"
 
 APP_NAME="HDZero Programmer"
 BUNDLE_ID="co.arkana.hdzeroprogrammer"
-VERSION="${VERSION:-1.0}"
+VERSION="${VERSION:-1.1}"
 
 # ---- Signing / notarization configuration ----------------------------------
 # Two "Developer ID Application" certs share the same name in this keychain, so
