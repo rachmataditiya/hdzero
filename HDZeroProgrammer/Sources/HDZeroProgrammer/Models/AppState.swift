@@ -15,6 +15,9 @@ final class AppState: ObservableObject {
     let monitor  = DeviceController(kind: .monitor)
     let eventVRX = DeviceController(kind: .eventVRX)
     let radio    = DeviceController(kind: .radio)
+    let goggle2  = DeviceController(kind: .goggle2)
+
+    private var allControllers: [DeviceController] { [vtx, monitor, eventVRX, radio, goggle2] }
 
     /// Path to the flashrom binary used by the VTX path. Prefer the copy bundled
     /// inside the .app; fall back to a Homebrew install for `swift run` dev.
@@ -22,11 +25,11 @@ final class AppState: ObservableObject {
 
     /// True if any device is mid-operation — used to lock tab switching.
     var anyBusy: Bool {
-        [vtx, monitor, eventVRX, radio].contains { $0.phase.isBusy }
+        allControllers.contains { $0.phase.isBusy }
     }
 
     init() {
-        for c in [vtx, monitor, eventVRX, radio] { c.app = self }
+        for c in allControllers { c.app = self }
     }
 
     func controller(for kind: DeviceKind) -> DeviceController {
@@ -35,6 +38,7 @@ final class AppState: ObservableObject {
         case .monitor:  return monitor
         case .eventVRX: return eventVRX
         case .radio:    return radio
+        case .goggle2:  return goggle2
         }
     }
 
@@ -70,6 +74,7 @@ final class DeviceController: ObservableObject {
     @Published var phase: OperationPhase = .idle
     @Published var progress: Double = 0          // 0…1 during .flashing
     @Published var log: String = ""
+    @Published var info: DeviceInfo?             // last Read/Detect result (nil = not probed)
 
     // VTX-specific: chosen target name + version (drives the asset URL).
     @Published var vtxTarget: String?
@@ -96,5 +101,33 @@ final class DeviceController: ObservableObject {
     func succeed(_ summary: String) {
         progress = 1
         phase = .done(summary)
+    }
+
+    /// Record a Read/Detect result + finish the operation accordingly.
+    func detected(_ found: DeviceInfo) {
+        info = found
+        if found.connected { phase = .done(found.detail) }
+        else { fail(found.detail) }
+    }
+
+    /// Read/Detect entry point — confirms the programmer/cable can reach the device
+    /// and reads its chip/id, dispatching by transport. (No write happens.)
+    func detect() async {
+        guard let app = app else { return }
+        info = nil
+        progress = 0
+        log = ""
+        phase = .connecting
+        appendLog("== Read / Detect \(kind.rawValue) ==\n")
+        switch kind.transport {
+        case .flashromSPI:
+            // VTX knows its chip; Goggle 2 (and unknown chips) auto-detect with no -c.
+            let chip: String? = (kind == .vtx) ? FlashromService.chip : nil
+            await FlashromService.probe(chip: chip, flashrom: app.flashromPath, controller: self)
+        case .ch341Native:
+            await CH341Flasher.detect(kind: kind, controller: self)
+        case .serial:
+            await RadioFlasher.detect(controller: self)
+        }
     }
 }

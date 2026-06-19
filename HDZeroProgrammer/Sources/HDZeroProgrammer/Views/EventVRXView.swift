@@ -15,10 +15,11 @@ struct EventVRXView: View {
                 .disabled(!canFlash || c.phase.isBusy)
             }
         } right: {
-            Panel(title: "Status", systemImage: "info.circle") {
+            Panel(title: "Device", systemImage: "info.circle") {
                 Text("Two flash chips (5680 + FPGA) are erased then written via the native CH341 driver. The full erase can take over a minute — don't unplug.")
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                DetectRow(c: c)
                 Divider()
                 StatusBarView(controller: c)
             }

@@ -15,10 +15,11 @@ struct RadioView: View {
                 .disabled(!canFlash || c.phase.isBusy)
             }
         } right: {
-            Panel(title: "Status", systemImage: "info.circle") {
+            Panel(title: "Device", systemImage: "info.circle") {
                 Text("Updates in three stages over USB-serial: ELRS TX (ESP32), ELRS backpack (ESP32-C3), then the STM32 via XMODEM. Keep the radio connected throughout.")
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                DetectRow(c: c)
                 Divider()
                 StatusBarView(controller: c)
             }

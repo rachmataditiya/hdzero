@@ -12,6 +12,34 @@ enum RadioFlasher {
 
     struct Fail: LocalizedError { let m: String; init(_ m: String){ self.m = m }; var errorDescription: String? { m } }
 
+    // MARK: Read / Detect — confirm the radio's serial ports enumerate
+
+    static func detect(controller c: DeviceController) async {
+        c.appendLog("Scanning serial ports…\n")
+        let ports = SerialPort.list()
+        for p in ports { c.appendLog("• \(p.path)  [\(p.vendorName) \(p.productName)]\n") }
+        let stm = ports.first {
+            $0.vendorName.localizedCaseInsensitiveContains("STMicro") ||
+            $0.path.localizedCaseInsensitiveContains("STMicro")
+        }
+        let ch340 = ports.first {
+            $0.vendorName.localizedCaseInsensitiveContains("CH340") ||
+            $0.productName.localizedCaseInsensitiveContains("CH340") ||
+            $0.path.localizedCaseInsensitiveContains("CH340")
+        }
+        if let stm = stm {
+            let extra = ch340 != nil ? " · ELRS (CH340) present" : ""
+            c.detected(DeviceInfo(connected: true, chipId: nil, chipName: "STM32 radio", sizeKB: nil,
+                                  detail: "Detected radio: STM32 @ \(stm.path)\(extra)"))
+        } else if ch340 != nil {
+            c.detected(DeviceInfo(connected: true, chipId: nil, chipName: "ELRS (CH340)", sizeKB: nil,
+                                  detail: "ELRS (CH340) port present, but no STM32 — radio may be in bootloader."))
+        } else {
+            c.detected(DeviceInfo(connected: false, chipId: nil, chipName: nil, sizeKB: nil,
+                                  detail: "No HDZero radio serial port found — connect the radio via USB and check the cable."))
+        }
+    }
+
     static func flash(source: URL, controller c: DeviceController) async {
         c.resetForRun()
         c.phase = .preparing
@@ -92,6 +120,12 @@ enum RadioFlasher {
             log("flashing \(file) @ 0x\(String(offset, radix: 16)) (\(data.count) bytes)\n")
             try esp.flashImage(data, at: offset) { f in
                 onProgress((Double(i) + f) / Double(total))
+            }
+            // Read-back verify this image (MD5) while still in the bootloader.
+            switch esp.verify(data, at: offset) {
+            case .match:               log("✓ verified \(file)\n")
+            case .mismatch(let m):     throw Fail("Verify failed for \(file): \(m). Do NOT power off — re-flash.")
+            case .unavailable(let m):  log("⚠︎ verify skipped for \(file) (\(m))\n")
             }
         }
         try esp.finish(reboot: true)

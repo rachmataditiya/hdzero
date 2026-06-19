@@ -28,6 +28,8 @@ struct VTXView: View {
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
 
+                DetectRow(c: c)
+
                 VStack(spacing: 8) {
                     Button { Task { await flash() } } label: {
                         Label("Flash VTX", systemImage: "bolt.fill")
@@ -43,6 +45,13 @@ struct VTXView: View {
                     }
                     .controlSize(.large)
                     .disabled(c.phase.isBusy)
+
+                    Button { Task { await verify() } } label: {
+                        Label("Verify against firmware", systemImage: "checkmark.shield")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .controlSize(.large)
+                    .disabled(!canFlash || c.phase.isBusy)
                 }
                 .padding(.vertical, 2)
 
@@ -151,5 +160,19 @@ struct VTXView: View {
         panel.allowedContentTypes = [UTType(filenameExtension: "bin") ?? .data]
         guard panel.runModal() == .OK, let dest = panel.url else { return }
         await FlashromService.backup(to: dest, flashrom: app.flashromPath, controller: c)
+    }
+
+    private func verify() async {
+        let src: URL
+        switch c.source {
+        case .local(let u): src = u
+        case .online(_, let url):
+            c.phase = .downloading
+            c.appendLog("Downloading \(url.lastPathComponent)…\n")
+            do { src = try await Downloader.download(url) }
+            catch { c.fail("Download failed: \(error.localizedDescription)"); return }
+        case .none: return
+        }
+        await FlashromService.verify(source: src, flashrom: app.flashromPath, controller: c)
     }
 }

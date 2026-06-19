@@ -43,6 +43,67 @@ enum FlashromService {
         }
     }
 
+    /// Read/Detect: probe the SPI flash WITHOUT writing — confirms the CH341A +
+    /// chip are reachable and identifies the chip. `chip == nil` lets flashrom
+    /// auto-detect (used by Goggle 2, whose exact chip we're identifying).
+    static func probe(chip: String?, flashrom: String, controller c: DeviceController) async {
+        var cmd = "\(AdminRunner.shellQuote(flashrom)) -p \(programmer)"
+        if let chip { cmd += " -c \(AdminRunner.shellQuote(chip))" }
+        c.appendLog("→ \(cmd)\n\n")
+        do {
+            // flashrom with no operation just probes; it may exit non-zero when
+            // several chip definitions share the detected id, but it still prints
+            // the "Found ... flash chip" line(s) we parse — so ignore the status.
+            let result = try await AdminRunner.run(cmd) { c.appendLog($0) }
+            if let (name, kb) = parseFound(result.output) {
+                let detail = "Detected: \(name)" + (kb.map { " · \($0) kB" } ?? "")
+                c.detected(DeviceInfo(connected: true, chipId: nil, chipName: name,
+                                      sizeKB: kb, detail: detail))
+            } else {
+                c.detected(DeviceInfo(connected: false, chipId: nil, chipName: nil, sizeKB: nil,
+                    detail: "No flash chip detected — check the CH341A clip/cable is seated and the device is powered."))
+            }
+        } catch {
+            c.fail(error.localizedDescription)
+        }
+    }
+
+    /// Explicit standalone verify of an already-flashed chip against an image.
+    static func verify(source: URL, flashrom: String, controller c: DeviceController) async {
+        c.resetForRun()
+        c.phase = .preparing
+        c.appendLog("== Verify VTX firmware ==\n")
+        let padded: URL
+        do { padded = try FirmwareImage.preparePaddedImage(from: source) }
+        catch { c.fail(error.localizedDescription); return }
+        c.phase = .verifying
+        let cmd = "\(AdminRunner.shellQuote(flashrom)) -p \(programmer) "
+            + "-c \(AdminRunner.shellQuote(chip)) -v \(AdminRunner.shellQuote(padded.path))"
+        c.appendLog("→ \(cmd)\n\n")
+        do {
+            let result = try await AdminRunner.run(cmd) { c.appendLog($0); Self.updatePhase(from: $0, controller: c) }
+            if result.status == 0 { c.succeed("Verified — flash matches the image.") }
+            else { c.fail(diagnose(result.output, status: result.status)) }
+        } catch { c.fail(error.localizedDescription) }
+    }
+
+    /// Parse `Found <maker> flash chip "<name>" (<N> kB...` from flashrom output.
+    private static func parseFound(_ output: String) -> (name: String, sizeKB: Int?)? {
+        for line in output.components(separatedBy: "\n") where line.contains("Found") && line.contains("flash chip") {
+            guard let q1 = line.firstIndex(of: "\""),
+                  let q2 = line[line.index(after: q1)...].firstIndex(of: "\"") else { continue }
+            let name = String(line[line.index(after: q1)..<q2])
+            var kb: Int? = nil
+            if let paren = line.range(of: "(", range: q2..<line.endIndex) {
+                let after = line[paren.upperBound...]
+                let digits = after.prefix { $0.isNumber }
+                if after.contains("kB"), let v = Int(digits) { kb = v }
+            }
+            return (name, kb)
+        }
+        return nil
+    }
+
     /// Read the current firmware off the VTX into a user-chosen file (backup).
     static func backup(to destination: URL, flashrom: String, controller c: DeviceController) async {
         c.resetForRun()

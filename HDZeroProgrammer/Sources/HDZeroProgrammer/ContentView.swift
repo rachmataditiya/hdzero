@@ -23,6 +23,10 @@ struct ContentView: View {
                 RadioView().environmentObject(app).environmentObject(app.radio)
                     .tabItem { Label("Radio", systemImage: "gamecontroller") }
                     .tag(DeviceKind.radio)
+
+                GoggleView().environmentObject(app).environmentObject(app.goggle2)
+                    .tabItem { Label("Goggle 2", systemImage: "eyeglasses") }
+                    .tag(DeviceKind.goggle2)
             }
             .padding(.horizontal, 12)
             .disabled(app.anyBusy)   // lock tab switching during an operation

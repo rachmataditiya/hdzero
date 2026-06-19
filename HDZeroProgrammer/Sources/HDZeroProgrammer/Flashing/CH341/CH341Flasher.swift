@@ -9,6 +9,60 @@ import Foundation
 @MainActor
 enum CH341Flasher {
 
+    // MARK: Read / Detect — open the CH341, select the chip's bank, read its JEDEC id
+
+    static func detect(kind: DeviceKind, controller c: DeviceController) async {
+        c.appendLog("Reading \(kind.rawValue) chip id over CH341…\n")
+        let result: Result<Int, Error> = await Task.detached(priority: .userInitiated) {
+            let dev = CH341Device()
+            do {
+                try dev.open(); defer { dev.close() }
+                let spi = CH341SPI(dev)
+                try spi.setStream(mode: 0x80)
+                switch kind {
+                case .monitor:  try spi.flashSwitch1()   // Monitor's main flash bank
+                case .eventVRX: try spi.flashSet5680()    // Event-VRX 5680 bank
+                default:        break
+                }
+                let id = try spi.flashReadID()
+                if kind == .monitor { try? spi.flashRelease() }
+                return .success(id)
+            } catch { return .failure(error) }
+        }.value
+
+        switch result {
+        case .success(let id):
+            if FlashChips.isValid(jedec: id) {
+                let (name, kb) = FlashChips.describe(jedec: id)
+                c.detected(DeviceInfo(connected: true, chipId: id, chipName: name, sizeKB: kb,
+                                      detail: "Detected: \(name)" + (kb.map { " · \($0) kB" } ?? "")))
+            } else {
+                c.detected(DeviceInfo(connected: false, chipId: id, chipName: nil, sizeKB: nil,
+                    detail: "No chip id (0x\(String(format: "%06X", id))) — check the CH341 cable/socket and power."))
+            }
+        case .failure(let e):
+            c.detected(DeviceInfo(connected: false, chipId: nil, chipName: nil, sizeKB: nil,
+                                  detail: e.localizedDescription))
+        }
+    }
+
+    /// Read back `data.count` bytes from the currently-selected bank and compare.
+    /// Throws on the first mismatch (with the address) — the caller has already
+    /// set the right bank via flashSwitch*/flashSet*.
+    private static func verifyChip(_ spi: CH341SPI, _ data: [UInt8], onProgress: (Int) -> Void) throws {
+        var off = 0
+        while off < data.count {
+            let n = min(256, data.count - off)
+            let rb = try spi.flashReadPage(off, n)
+            guard rb.count >= n else { throw Fail("Verify read short at 0x\(String(off, radix: 16)).") }
+            for i in 0..<n where rb[i] != data[off + i] {
+                throw Fail("Verify mismatch at 0x\(String(off + i, radix: 16)): wrote 0x\(String(data[off + i], radix: 16)), read 0x\(String(rb[i], radix: 16)). Do NOT repower — re-flash.")
+            }
+            off += n
+            onProgress(n)
+        }
+    }
+
     // MARK: Monitor (three chips: 5680 / FPGA / 8339)
 
     static func flashMonitor(source: URL, controller c: DeviceController) async {
@@ -37,9 +91,14 @@ enum CH341Flasher {
             try spi.flashSwitch0(); try writeChip(spi, fw.b5680) { written += $0; progress(.flashing, Double(written)/Double(total)) }
             try spi.flashSwitch1(); try writeChip(spi, fw.bFPGA) { written += $0; progress(.flashing, Double(written)/Double(total)) }
             try spi.flashSwitch2(); try writeChip(spi, fw.b8339) { written += $0; progress(.flashing, Double(written)/Double(total)) }
+            // Read-back verify each bank before declaring success.
+            var vdone = 0
+            try spi.flashSwitch0(); try verifyChip(spi, fw.b5680) { vdone += $0; progress(.verifying, Double(vdone)/Double(total)) }
+            try spi.flashSwitch1(); try verifyChip(spi, fw.bFPGA) { vdone += $0; progress(.verifying, Double(vdone)/Double(total)) }
+            try spi.flashSwitch2(); try verifyChip(spi, fw.b8339) { vdone += $0; progress(.verifying, Double(vdone)/Double(total)) }
             try spi.flashRelease()
         } onDone: {
-            c.succeed("Monitor firmware written — repower the Monitor now.")
+            c.succeed("Monitor firmware written & verified — repower the Monitor now.")
         }
     }
 
@@ -83,6 +142,13 @@ enum CH341Flasher {
         let total = max(1, fw.b5680.count + fw.bFPGA.count)
         await runUSB(controller: c, connecting: "Connecting Event-VRX…") { spi, progress in
             try spi.setStream(mode: 0x80)
+            // Detect first: read the 5680 bank's JEDEC id so a dead clip/cable
+            // fails here instead of after a (long) blind erase.
+            try spi.flashSet5680()
+            let id = try spi.flashReadID()
+            guard FlashChips.isValid(jedec: id) else {
+                throw Fail("Event-VRX flash not detected (id 0x\(String(format: "%06X", id))). Check the CH341 cable/socket and power.")
+            }
             // Erase both chips, then write. The hardware needs a long settle
             // after the FPGA chip-erase (~65 s in the Python).
             progress(.erasing, 0)
@@ -96,8 +162,12 @@ enum CH341Flasher {
             try writeSPIPaged(spi, fw.b5680) { written += $0; progress(.flashing, Double(written)/Double(total)) }
             try spi.flashSetFPGA()
             try writeSPIPaged(spi, fw.bFPGA) { written += $0; progress(.flashing, Double(written)/Double(total)) }
+            // Read-back verify each bank.
+            var vdone = 0
+            try spi.flashSet5680(); try verifyChip(spi, fw.b5680) { vdone += $0; progress(.verifying, Double(vdone)/Double(total)) }
+            try spi.flashSetFPGA(); try verifyChip(spi, fw.bFPGA) { vdone += $0; progress(.verifying, Double(vdone)/Double(total)) }
         } onDone: {
-            c.succeed("Event-VRX firmware written — repower now.")
+            c.succeed("Event-VRX firmware written & verified — repower now.")
         }
     }
 

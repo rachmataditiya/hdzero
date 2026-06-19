@@ -34,6 +34,7 @@ final class FirmwareCatalog: ObservableObject {
     @Published var monitorVersions:  [VersionAsset] = []
     @Published var eventVRXVersions: [VersionAsset] = []
     @Published var radioVersions:    [VersionAsset] = []
+    @Published var goggle2Versions:  [VersionAsset] = []
 
     func versions(for kind: DeviceKind) -> [VersionAsset] {
         switch kind {
@@ -41,6 +42,7 @@ final class FirmwareCatalog: ObservableObject {
         case .monitor:  return monitorVersions
         case .eventVRX: return eventVRXVersions
         case .radio:    return radioVersions
+        case .goggle2:  return goggle2Versions
         }
     }
 
@@ -53,14 +55,16 @@ final class FirmwareCatalog: ObservableObject {
             async let mon  = fetchReleases(repo: DeviceKind.monitor.releasesRepo)
             async let evrx = fetchReleases(repo: DeviceKind.eventVRX.releasesRepo)
             async let rad  = fetchReleases(repo: DeviceKind.radio.releasesRepo)
+            async let gog2 = fetchReleases(repo: DeviceKind.goggle2.releasesRepo)
 
-            let (vtxRel, commonH, monRel, evrxRel, radRel) =
-                try await (vtxReleases, common, mon, evrx, rad)
+            let (vtxRel, commonH, monRel, evrxRel, radRel, gog2Rel) =
+                try await (vtxReleases, common, mon, evrx, rad, gog2)
 
             vtxTargets       = Self.parseVTX(releases: vtxRel, commonHeader: commonH)
             monitorVersions  = Self.flatVersions(monRel)
             eventVRXVersions = Self.flatVersions(evrxRel)
             radioVersions    = Self.flatVersions(radRel)
+            goggle2Versions  = Self.flatVersions(gog2Rel)
             state = .ready
         } catch {
             state = .failed((error as NSError).localizedDescription)

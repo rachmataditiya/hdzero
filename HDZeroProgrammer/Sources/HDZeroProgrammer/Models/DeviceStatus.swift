@@ -25,13 +25,14 @@ enum OperationPhase: Equatable {
     }
 }
 
-// MARK: - The four device families this tool programs.
+// MARK: - The device families this tool programs.
 
 enum DeviceKind: String, CaseIterable, Identifiable {
     case vtx        = "VTX"
     case monitor    = "Monitor"
     case eventVRX   = "Event VRX"
     case radio      = "Radio"
+    case goggle2    = "Goggle 2"
 
     var id: String { rawValue }
 
@@ -42,6 +43,7 @@ enum DeviceKind: String, CaseIterable, Identifiable {
         case .monitor:  return "hd-zero/monitor"
         case .eventVRX: return "hd-zero/event-vrx"
         case .radio:    return "hd-zero/hdzero-radio"
+        case .goggle2:  return "hd-zero/hdzero-goggle2"
         }
     }
 
@@ -51,8 +53,21 @@ enum DeviceKind: String, CaseIterable, Identifiable {
         case .vtx:                  return .flashromSPI      // single W25Q80 chip
         case .monitor, .eventVRX:   return .ch341Native      // multi-chip via GPIO
         case .radio:                return .serial           // XMODEM + esptool
+        case .goggle2:              return .flashromSPI      // CH341A SPI to the goggle's firmware socket
         }
     }
+}
+
+// MARK: - Result of a Read/Detect probe (shown in the UI before flashing).
+
+/// What a "Read / Detect device" probe found. `connected == false` means the
+/// programmer/cable couldn't talk to a chip (loose clip, unpowered device, etc.).
+struct DeviceInfo: Equatable {
+    var connected: Bool
+    var chipId: Int?          // JEDEC RDID (native CH341) when available
+    var chipName: String?     // human chip/family name
+    var sizeKB: Int?          // flash size in kB when known
+    var detail: String        // one-line summary for the status row
 }
 
 enum Transport {

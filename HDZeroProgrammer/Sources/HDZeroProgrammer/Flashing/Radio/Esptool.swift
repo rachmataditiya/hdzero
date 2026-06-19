@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 /// Minimal ESP ROM-bootloader flasher (no stub, uncompressed) for the ELRS
 /// TX (ESP32) and backpack (ESP32-C3), replacing the Python `esptool` calls.
@@ -14,6 +15,7 @@ final class Esptool {
     private let SYNC:        UInt8 = 0x08
     private let READ_REG:    UInt8 = 0x0A
     private let SPI_ATTACH:  UInt8 = 0x0D
+    private let SPI_FLASH_MD5: UInt8 = 0x13
     // SLIP
     private let END: UInt8 = 0xC0
     private let ESC: UInt8 = 0xDB
@@ -101,6 +103,36 @@ final class Esptool {
 
     func finish(reboot: Bool) throws {
         _ = try? command(FLASH_END, data: le32(reboot ? 0 : 1), timeout: 2.0)
+    }
+
+    // MARK: Verify (SPI_FLASH_MD5) — compare the device's MD5 of the flashed region
+    // to the image's MD5. On any protocol hiccup we return `.unavailable` rather
+    // than failing, since each FLASH_DATA block is already ack'd during the write.
+
+    enum VerifyResult { case match, mismatch(String), unavailable(String) }
+
+    func verify(_ data: [UInt8], at offset: Int) -> VerifyResult {
+        let want = Insecure.MD5.hash(data: Data(data)).map { String(format: "%02x", $0) }.joined()
+        var p: [UInt8] = []
+        p.append(le32(UInt32(offset)))
+        p.append(le32(UInt32(data.count)))
+        p.append(le32(0)); p.append(le32(0))     // reserved (reg/mask) for ROM MD5
+        guard let frame = try? command(SPI_FLASH_MD5, data: p, timeout: 15.0),
+              frame.count >= 10 else {
+            return .unavailable("device MD5 command unsupported/failed")
+        }
+        // Body is between the 8-byte header and the 2 trailing status bytes. The
+        // stub returns 32 ASCII hex chars; the ROM loader returns 16 raw bytes.
+        let body = Array(frame[8..<(frame.count - 2)])
+        let got: String
+        if body.count >= 32 {
+            got = String(decoding: body.prefix(32), as: UTF8.self).lowercased()
+        } else if body.count >= 16 {
+            got = body.prefix(16).map { String(format: "%02x", $0) }.joined()
+        } else {
+            return .unavailable("unexpected MD5 length \(body.count)")
+        }
+        return got == want ? .match : .mismatch("device \(got) ≠ file \(want)")
     }
 
     // MARK: Command / response (SLIP)

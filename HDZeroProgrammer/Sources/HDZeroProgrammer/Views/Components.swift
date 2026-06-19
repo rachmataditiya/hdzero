@@ -50,6 +50,39 @@ struct Field<Control: View>: View {
     }
 }
 
+// MARK: - Read / Detect device row (shared by every device tab)
+
+/// A "Read / Detect device" button + a result line. Confirms the programmer/cable
+/// can reach the device and shows the chip it found, BEFORE the user commits a flash.
+struct DetectRow: View {
+    @ObservedObject var c: DeviceController
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Button { Task { await c.detect() } } label: {
+                Label("Read / Detect device", systemImage: "magnifyingglass")
+                    .frame(maxWidth: .infinity)
+            }
+            .controlSize(.large)
+            .disabled(c.phase.isBusy)
+
+            if let info = c.info {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: info.connected ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
+                        .foregroundStyle(info.connected ? .green : .orange)
+                    Text(info.detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            } else {
+                Text("Read first to confirm the clip/cable and the device are seen.")
+                    .font(.caption).foregroundStyle(.tertiary)
+            }
+        }
+    }
+}
+
 // MARK: - Online/local firmware picker (non-VTX devices)
 
 import UniformTypeIdentifiers

@@ -10,6 +10,7 @@ struct MonitorView: View {
             // LEFT — firmware flash
             Panel(title: "Firmware", systemImage: "shippingbox") {
                 OnlineLocalPicker(c: c).environmentObject(app)
+                DetectRow(c: c)
                 Button { Task { await flash() } } label: {
                     Label("Flash Monitor", systemImage: "bolt.fill").frame(maxWidth: .infinity)
                 }
